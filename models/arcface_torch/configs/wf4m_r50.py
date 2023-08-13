@@ -20,7 +20,7 @@ config.verbose = 2000
 config.dali = False
 
 config.rec = "/train_tmp/WebFace4M"
-config.num_classes = 205990
+config.last_dim = 205990
 config.num_image = 4235242
 config.num_epoch = 20
 config.warmup_epoch = 0

@@ -314,7 +314,7 @@ def dumpR(data_set,
     embeddings = embeddings_list[0] + embeddings_list[1]
     embeddings = sklearn.preprocessing.normalize(embeddings)
     actual_issame = np.asarray(issame_list)
-    outname = os.path.join('temp.bin')
+    outname = os.path.join('auto_encoder.bin')
     with open(outname, 'wb') as f:
         pickle.dump((embeddings, issame_list),
                     f,

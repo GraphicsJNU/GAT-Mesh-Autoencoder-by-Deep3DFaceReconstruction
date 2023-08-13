@@ -55,6 +55,7 @@ def main(rank, opt, name='examples'):
     for i in range(len(im_path)):
         print(i, im_path[i])
         img_name = im_path[i].split(os.path.sep)[-1].replace('.png', '').replace('.jpg', '')
+        img_name += opt.net_type
         if not os.path.isfile(lm_path[i]):
             print("%s is not found !!!" % lm_path[i])
             continue

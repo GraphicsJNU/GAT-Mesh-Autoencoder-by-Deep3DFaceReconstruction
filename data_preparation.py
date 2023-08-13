@@ -85,4 +85,143 @@ if __name__ == '__main__':
     #                 for lm in seq:
     #                     f.write(f'{lm[0]} {lm[1]}\n')
 
+    # facewarehouse_model_info.mat 변경
+    # from scipy.io import loadmat, savemat
+    #
+    # bfm_folder = './BFM'
+    # default_name = 'facewarehouse_model_info.mat'
+    # save_name = 'facewarehouse_model_front.mat'
+    # facewarehouse_model_info = loadmat(os.path.join(bfm_folder, default_name))
+    # data = {'meanshape': facewarehouse_model_info['meanshape'], 'meantex': facewarehouse_model_info['meantex'],
+    #         'idBase': facewarehouse_model_info['idBase_PCA'], 'exBase': facewarehouse_model_info['exBase_PCA'],
+    #         'texBase': facewarehouse_model_info['texBase_PCA'], 'tri': facewarehouse_model_info['tri'],
+    #         'point_buf': facewarehouse_model_info['point_buf'], 'keypoints': facewarehouse_model_info['keypoints_68']}
+    #
+    # savemat(os.path.join(bfm_folder, save_name), data)
+
+    # 300W-LP 데이터셋 조정
+    # from mtcnn import MTCNN
+    # from facenet_pytorch import MTCNN
+    # from glob import glob
+    # import shutil
+
+    # folders = ['300W-LP', 'AFLW2000-3D']
+    # fps = glob(f'.\\datasets\\300W-3D\\*\\*.mat')
+    # for fp in tqdm(fps):
+    #     shutil.copy(fp, f'.\\datasets\\300W-3D\\' + fp[fp.rfind('\\') + 1:])
+    # fps = glob(f'.\\datasets\\300W-3D\\*\\*.jpg')
+    # for fp in tqdm(fps):
+    #     shutil.copy(fp, f'.\\datasets\\300W-3D\\' + fp[fp.rfind('\\') + 1:])
+
+    # folders = opt.img_folder
+    # for folder in folders:
+    #     fps = glob(f'.\\datasets\\{folder}\\*.jpg')
+    #     for fp in tqdm(fps):
+    #         filename = fp[fp.rfind('\\') + 1:]
+    #         filename = filename[:filename.rfind('.')]
+    #         txt_file = f'.\\datasets\\{folder}\\detections\\{filename}.txt'
+    #         if not os.path.exists(txt_file):
+    #             img = cv2.cvtColor(cv2.imread(f'.\\datasets\\{folder}\\{filename}.jpg'), cv2.COLOR_BGR2RGB)
+    #             # boxes, probs, points = mtcnn.detect(img, True)
+    #             # print(points)
+    #             # exit(0)
+    #             # detector = MTCNN()
+    #             result = detector.detect_faces(img)
+    #             if len(result) > 1:
+    #                 result.sort(key=lambda x: x['box'][2] * x['box'][3], reverse=True)
+    #             elif len(result) == 0:
+    #                 continue
+    #
+    #             lms = result[0]['keypoints']
+    #             seq = [lms['left_eye'], lms['right_eye'], lms['nose'], lms['mouth_left'], lms['mouth_right']]
+    #             with open(txt_file, 'w') as f:
+    #                 for lm in seq:
+    #                     f.write(f'{lm[0]} {lm[1]}\n')
+
+    # https://github.com/yfeng95/face3d
+    from scipy.io import loadmat, savemat
+    import util.mesh as mesh
+    import os.path as osp
+
+    def get_path(file_name):
+        return osp.join('./BFM', file_name)
+
+    def process_uv(uv_coords, uv_h=256, uv_w=256):
+        uv_coords[:, 0] = uv_coords[:, 0] * (uv_w - 1)
+        uv_coords[:, 1] = uv_coords[:, 1] * (uv_h - 1)
+        uv_coords[:, 1] = uv_h - uv_coords[:, 1] - 1
+        uv_coords = np.hstack((uv_coords, np.zeros((uv_coords.shape[0], 1))))  # add z
+
+        return uv_coords
+
+    size = 224
+    data = loadmat(get_path('BFM_model_for_300W_3D.mat'))
+    index_shape = loadmat(get_path('BFM_exp_idx.mat'))['trimIndex'].astype(np.int32) - 1  # 0 ~ 53490
+    front_index_shape = loadmat(get_path('BFM_front_idx.mat'))['idx'].astype(np.int32) - 1  # 0 ~ 53215
+    index_shape = index_shape[front_index_shape].reshape(-1)
+    # https://github.com/anilbas/3DMMasSTN
+    uv_coords = loadmat(get_path('BFM_UV.mat'))['UV']
+    uv_coords = uv_coords[index_shape]
+    uv_coords = process_uv(uv_coords, size, size)
+
+    faces = data['tri'].astype(np.int32) - 1
+    colors = data['meantex'].reshape(-1, 3)
+    uv_mean_texture_map = mesh.render.render_colors(uv_coords, faces, colors, size, size, c=3)
+    cv2.imwrite('./models/gat/datas/texture.png', cv2.cvtColor(uv_mean_texture_map, cv2.COLOR_BGR2RGB))
+
+    uv_texture_base = np.zeros((size, size, 3, data['texBase'].shape[1]))
+    texBase = data['texBase'].reshape(-1, 3, 199)
+    for i in range(uv_texture_base.shape[3]):
+        uv_texture_base[:, :, :, i] = mesh.render.render_colors(uv_coords, faces, texBase[:, :, i], size, size, c=3)
+
+    save_data = {
+        'meanshape': data['meanshape'],
+        'meantex': data['meantex'],
+        'meantexImg': uv_mean_texture_map.reshape(1, -1),
+        'idBase': data['idBase'],
+        'exBase': data['exBase'],
+        'texBase': data['texBase'],
+        'texBaseImg': uv_texture_base.reshape(-1, 199),
+        'tri': data['tri'],
+        'point_buf': data['point_buf'],
+        'tri_mask2': data['tri_mask2'],
+        'keypoints': data['keypoints'],
+        'frontmask2_idx': data['frontmask2_idx'],
+        'skinmask': data['skinmask'],
+        'uvcoords': uv_coords
+    }
+
+    savemat(get_path('BFM_model_for_300W_3D.mat'), save_data)
+
+    # with np.load('./BFM/earth.npz') as f:
+    #     pos_idx, pos, uv_idx, uv, tex = f.values()
+
+    # data = loadmat(get_path('BFM_model_for_300W_3D.mat'))
+    # index_shape = loadmat(get_path('BFM_exp_idx.mat'))['trimIndex'].astype(np.int32) - 1  # 0 ~ 53490
+    # front_index_shape = loadmat(get_path('BFM_front_idx.mat'))['idx'].astype(np.int32) - 1  # 0 ~ 53215
+    # index_shape = index_shape[front_index_shape].reshape(-1)
+    # # https://github.com/anilbas/3DMMasSTN
+    # uv_coords = loadmat(get_path('BFM_UV.mat'))['UV']
+    # uv_coords = uv_coords[index_shape]
+    # save_lines = []
+    # with open('./models/gat/datas/mu.obj') as f:
+    #     lines = f.readlines()
+    #     faces = []
+    #     for line in lines:
+    #         if line.startswith('v '):
+    #             save_lines.append(line)
+    #         if line.startswith('f '):
+    #             faces.append(line[2:-1].split(" "))
+    #
+    #     for uv_coord in uv_coords:
+    #         save_lines.append(f"vt {uv_coord[0]} {uv_coord[1]}\n")
+    #
+    #     for face in faces:
+    #         save_lines.append(f"f {face[0]}/{face[0]} {face[1]}/{face[1]} {face[2]}/{face[2]}\n")
+    #
+    # with open('./models/gat/datas/mu2.obj', 'w') as f:
+    #     for line in save_lines:
+    #         f.write(line)
+
+    # AFLW2000-3D 300W-3D CelebA Facewarehouse
     data_prepare([os.path.join(opt.data_root, folder) for folder in opt.img_folder], opt.mode)

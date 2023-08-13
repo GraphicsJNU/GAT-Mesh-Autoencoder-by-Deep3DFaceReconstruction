@@ -132,7 +132,8 @@ def get_skin_mask(img_path):
     for i in tqdm(range(0, len(names)), desc='generating skin masks......'):
         name = names[i]
         # print('%05d' % (i), ' ', name)
-        full_image_name = os.path.join(img_path, name)
-        img = cv2.imread(full_image_name).astype(np.float32)
-        skin_img = skinmask(img)
-        cv2.imwrite(os.path.join(save_path, name), skin_img.astype(np.uint8))
+        if not os.path.isfile(os.path.join(save_path, name)):
+            full_image_name = os.path.join(img_path, name)
+            img = cv2.imread(full_image_name).astype(np.float32)
+            skin_img = skinmask(img)
+            cv2.imwrite(os.path.join(save_path, name), skin_img.astype(np.uint8))

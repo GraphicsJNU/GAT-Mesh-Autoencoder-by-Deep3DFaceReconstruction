@@ -20,7 +20,7 @@ config.verbose = 2000
 config.dali = False
 
 config.rec = "/train_tmp/ms1m-retinaface-t1"
-config.num_classes = 93431
+config.last_dim = 93431
 config.num_image = 5179510
 config.num_epoch = 40
 config.warmup_epoch = 0

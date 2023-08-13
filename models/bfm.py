@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from scipy.io import loadmat
 from util.load_mats import transferBFM09
 import os
+import util.mesh as mesh
 
 
 def perspective_projection(focal, center):
@@ -27,7 +28,6 @@ class SH:
 class BaseFaceModel:
     def __init__(self,
                  bfm_folder='./BFM',
-                 recenter=True,
                  camera_distance=10.,
                  init_lit=np.array([
                      0.8, 0, 0, 0, 0, 0, 0, 0, 0
@@ -38,28 +38,23 @@ class BaseFaceModel:
                  default_name='BFM_model_front.mat'):
         if not os.path.isfile(os.path.join(bfm_folder, default_name)):
             transferBFM09(bfm_folder)
-        self.model = loadmat(os.path.join(bfm_folder, default_name))
-        # mean face shape. [3 * N,1]
-        self.mean_shape = self.model['meanshape'].astype(np.float32)
+        model = loadmat(os.path.join(bfm_folder, default_name))
+
         # face indices for each vertex that lies in. starts from 0. [N,8]
-        self.point_buf = self.model['point_buf'].astype(np.int64) - 1
+        self.point_buf = model['point_buf'].astype(np.int64) - 1
         # vertex indices for each face. starts from 0. [F,3]
-        self.face_buf = self.model['tri'].astype(np.int64) - 1
+        self.face_buf = model['tri'].astype(np.int64) - 1
         # vertex indices for 68 landmarks. starts from 0. [68,1]
-        self.keypoints = np.squeeze(self.model['keypoints']).astype(np.int64) - 1
+        self.keypoints = np.squeeze(model['keypoints']).astype(np.int64) - 1
 
         if is_train:
             # vertex indices for small face region to compute photometric error. starts from 0.
-            self.front_mask = np.squeeze(self.model['frontmask2_idx']).astype(np.int64) - 1
+            if 'frontmask2_idx' in model.keys():
+                self.front_mask = np.squeeze(model['frontmask2_idx']).astype(np.int64) - 1
             # vertex indices for each face from small face region. starts from 0. [f,3]
-            self.front_face_buf = self.model['tri_mask2'].astype(np.int64) - 1
+            self.front_face_buf = model['tri_mask2'].astype(np.int64) - 1
             # vertex indices for pre-defined skin region to compute reflectance loss
-            self.skin_mask = np.squeeze(self.model['skinmask'])
-
-        if recenter:
-            mean_shape = self.mean_shape.reshape([-1, 3])
-            mean_shape = mean_shape - np.mean(mean_shape, axis=0, keepdims=True)
-            self.mean_shape = mean_shape.reshape([-1, 1])
+            self.skin_mask = np.squeeze(model['skinmask'])
 
         self.persc_proj = perspective_projection(focal, center)
         self.device = 'cpu'
@@ -223,7 +218,6 @@ class ParametricFaceModel(BaseFaceModel):
 
         BaseFaceModel.__init__(self,
                                bfm_folder,
-                               recenter,
                                camera_distance,
                                init_lit,
                                focal,
@@ -231,14 +225,22 @@ class ParametricFaceModel(BaseFaceModel):
                                is_train,
                                default_name)
 
+        model = loadmat(os.path.join(bfm_folder, default_name))
+        # mean face shape. [3 * N,1]
+        self.mean_shape = model['meanshape'].astype(np.float32)
         # identity basis. [3 * N, 80]
-        self.id_base = self.model['idBase'].astype(np.float32)
+        self.id_base = model['idBase'].astype(np.float32)
         # expression basis. [3 * N, 64]
-        self.exp_base = self.model['exBase'].astype(np.float32)
+        self.exp_base = model['exBase'].astype(np.float32)
         # mean face texture. [3 * N, 1] (0 - 255)
-        self.mean_tex = self.model['meantex'].astype(np.float32)
+        self.mean_tex = model['meantex'].astype(np.float32)
         # texture basis. [3 * N, 80]
-        self.tex_base = self.model['texBase'].astype(np.float32)
+        self.tex_base = model['texBase'].astype(np.float32)
+
+        if recenter:
+            mean_shape = self.mean_shape.reshape([-1, 3])
+            mean_shape = mean_shape - np.mean(mean_shape, axis=0, keepdims=True)
+            self.mean_shape = mean_shape.reshape([-1, 1])
 
     def compute_shape(self, id_coeff, exp_coeff):
         """
@@ -332,10 +334,11 @@ class ProposalFaceModel(BaseFaceModel):
                  focal=1015.,
                  center=112.,
                  is_train=True,
-                 default_name='BFM_model_front.mat'):
+                 coeff_dims=None,  # id_dim, tex_dim, angle_dim, gamma_dim, xy_dim, z_dim
+                 default_name='BFM_model_for_300W_3D.mat'):
+
         BaseFaceModel.__init__(self,
                                bfm_folder,
-                               recenter,
                                camera_distance,
                                init_lit,
                                focal,
@@ -346,46 +349,92 @@ class ProposalFaceModel(BaseFaceModel):
         import os.path as osp
         from psbody.mesh import Mesh
         from models.gat.utils.utils import to_edge_index, to_sparse, get_graph_info
-        from models.gat.networks import EncoderLayer, DecoderLayer, AutoEncoder
+        from models.gat.networks import DecoderLayer, AutoEncoder, VariationalAutoEncoder, RefineAutoEncoder
+
+        self.is_train = is_train
 
         base_path = './models/gat/datas'
-        mesh = Mesh(filename=osp.join(base_path, 'front_meanshape.obj'))
+        mesh = Mesh(filename=osp.join(base_path, 'mu.obj'))
         m, a, d, u, f = get_graph_info(mesh, './models/gat/datas')
 
+        if coeff_dims is None:
+            coeff_dims = [32, 80, 3, 27, 3]
+
+        self.coeff_dims = coeff_dims
+
         feature_dim = 3
-        latent_dim = 256
-        k = 6
-        lambda_max = 2.3
+        lambda_max = 2.0  # 2.3
         self.filters = [feature_dim, 16, 16, 16, 32, 32]
 
         edge_index_list = [to_edge_index(adj) for adj in a]
         up_transform_list = [to_sparse(up_transform) for up_transform in u]
 
-        self.encoder_layer = EncoderLayer("resnet50", 369)
-        self.decoder_layer = DecoderLayer(self.filters, edge_index_list, up_transform_list, latent_dim, k,
+        k = 6
+        w_kl = 1e-5
+        enc_conv, dec_conv = 'gat', 'cheb'
+        enc_k = k
+        dec_k = k
+        enc_k = k if enc_conv == 'cheb' else 1
+        dec_k = k if dec_conv == 'cheb' else 1
+        self.decoder_layer = DecoderLayer(self.filters, edge_index_list, up_transform_list, coeff_dims[0], dec_k,
                                           lambda_max=lambda_max, conv='cheb')
 
         self.mean = torch.load(osp.join(base_path, 'mean.pt'))
         self.std = torch.load(osp.join(base_path, 'standard_variation.pt'))
 
-        saved_data = torch.load(osp.join(base_path, 'auto_encoder_100000.pt'))
-        auto_encoder = AutoEncoder(feature_dim, latent_dim, a, d, u, k, lambda_max, 'gat', 'cheb', 'cpu')
+        variational_autoencoder_file_name = 'variational_auto_encoder_{:d}_{:d}_{:d}_{:.0e}.pt' \
+            .format(coeff_dims[0], enc_k, dec_k, w_kl)
+        saved_data = torch.load(osp.join(base_path, variational_autoencoder_file_name))
+        # saved_data = torch.load(osp.join(base_path, 'auto_encoder.pt'))
+        # saved_data = torch.load(osp.join(base_path, 'auto_encoder_100000.pt'))
+
+        auto_encoder = VariationalAutoEncoder(feature_dim, coeff_dims[0], a, d, u, enc_k, dec_k,
+                                              lambda_max, enc_conv, dec_conv, 'cpu')
+        # auto_encoder = AutoEncoder(feature_dim, coeff_dims[0], a, d, u, k, lambda_max, 'gat', 'cheb', 'cpu')
         auto_encoder.load_state_dict(saved_data['model_state_dict'])
 
         self.decoder_layer.load_state_dict(auto_encoder.decoder.state_dict())
 
-        self.encoder_layer.eval()
         self.decoder_layer.eval()
-        self.encoder_layer.encoder.train()
 
         # --------------------------------------------------------------------------------------------------------------
 
+        model = loadmat(os.path.join(bfm_folder, default_name))
         # mean face texture. [3 * N, 1] (0 - 255)
-        self.mean_tex = self.model['meantex'].astype(np.float32)
+        self.mean_tex = model['meantex'].astype(np.float32)
+        # self.mean_tex = model['meantexImg'].astype(np.float32
         # texture basis. [3 * N, 80]
-        self.tex_base = self.model['texBase'].astype(np.float32)
+        self.tex_base = model['texBase'].astype(np.float32)[:, :coeff_dims[1]]
+        # self.tex_base = model['texBaseImg'].astype(np.float32)[:, :coeff_dims[1]]
 
-    # 현재 PCA 로 되어 있어 GAT Mesh Autoencoder 으로 변경 필요
+        # self.size = 224
+        # self.uvcoords = model['uvcoords'].astype(np.float32)[:, :2]
+    def to(self, device):
+        super().to(device)
+
+        self.decoder_layer = self.decoder_layer.to(device)
+
+        for i in range(len(self.decoder_layer.edge_index_list)):
+            self.decoder_layer.edge_index_list[i] = self.decoder_layer.edge_index_list[i].to(device)
+
+        for i in range(len(self.decoder_layer.up_transform_list)):
+            self.decoder_layer.up_transform_list[i] = self.decoder_layer.up_transform_list[i].to(device)
+
+        self.mean = self.mean.to(device)
+        self.std = self.std.to(device)
+
+        self.mean_tex = self.mean_tex.to(device)
+        self.tex_base = self.tex_base.to(device)
+
+        self.point_buf = self.point_buf.to(device)
+        self.face_buf = self.face_buf.to(device)
+        self.keypoints = self.keypoints.to(device)
+
+        if self.is_train:
+            self.front_mask = self.front_mask.to(device)
+            self.front_face_buf = self.front_face_buf.to(device)
+            self.skin_mask = self.skin_mask.to(device)
+
     def compute_shape(self, id_coeff):
         """
         Return:
@@ -424,11 +473,16 @@ class ProposalFaceModel(BaseFaceModel):
         Parameters:
             coeffs          -- torch.tensor, size (B, 369)
         """
-        id_coeffs = coeffs[:, :256]  # coeffs[:, :80]
-        tex_coeffs = coeffs[:, 256:336]  # coeffs[:, 144:224]
-        angles = coeffs[:, 336:339]  # coeffs[:, 224:227]
-        gammas = coeffs[:, 339:366]  # coeffs[:, 227:254]
-        translations = coeffs[:, 366:]  # coeffs[:, 254:]
+        s, e = 0, self.coeff_dims[0]
+        id_coeffs = coeffs[:, s:e]  # coeffs[:, :256]  # coeffs[:, :80]
+        s, e = e, e + self.coeff_dims[1]
+        tex_coeffs = coeffs[:, s:e]  # coeffs[:, 256:336]  # coeffs[:, 144:224]
+        s, e = e, e + self.coeff_dims[2]
+        angles = coeffs[:, s:e]  # coeffs[:, 336:339]  # coeffs[:, 224:227]
+        s, e = e, e + self.coeff_dims[3]
+        gammas = coeffs[:, s:e]  # coeffs[:, 339:366]  # coeffs[:, 227:254]
+        s, e = e, e + self.coeff_dims[4]
+        translations = coeffs[:, s:]  # coeffs[:, 366:]  # coeffs[:, 254:]
         return {
             'id': id_coeffs,
             'tex': tex_coeffs,
@@ -437,6 +491,7 @@ class ProposalFaceModel(BaseFaceModel):
             'trans': translations
         }
 
+    # https://github.com/facebookresearch/pytorch3d/issues/736
     def compute_for_render(self, coeffs):
         """
         Return:
@@ -446,19 +501,37 @@ class ProposalFaceModel(BaseFaceModel):
         Parameters:
             coeffs          -- torch.tensor, size (B, 257)
         """
+        batch_size = coeffs.shape[0]
+
         coef_dict = self.split_coeff(coeffs)
         face_shape = self.compute_shape(coef_dict['id'])
-        rotation = self.compute_rotation(coef_dict['angle'])
 
+        rotation = self.compute_rotation(coef_dict['angle'])
         face_shape_transformed = self.transform(face_shape, rotation, coef_dict['trans'])
+
         face_vertex = self.to_camera(face_shape_transformed)
 
         face_proj = self.to_image(face_vertex)
         landmark = self.get_landmarks(face_proj)
 
         face_texture = self.compute_texture(coef_dict['tex'])
+
         face_norm = self.compute_norm(face_shape)
         face_norm_roted = face_norm @ rotation
         face_color = self.compute_color(face_texture, face_norm_roted, coef_dict['gamma'])
 
         return face_vertex, face_texture, face_color, landmark
+
+    def unwrap(self, colors):
+        bs = colors.shape[0]
+        uvcoords = self.uvcoords.detach().cpu().numpy()
+        face_buf = self.face_buf.detach().cpu().numpy()
+        colors = colors.detach().cpu().numpy()
+
+        ret = torch.zeros((bs, self.size, self.size, 3), dtype=torch.float32)
+        for i in range(bs):
+            print(i)
+            ret[i, :, :, :] = torch.from_numpy(
+                mesh.render.render_colors(uvcoords, face_buf, colors[i], self.size, self.size, c=3))
+
+        return ret

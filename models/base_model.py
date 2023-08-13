@@ -104,7 +104,7 @@ class BaseModel(ABC):
 
         if not self.isTrain or opt.continue_train:
             load_suffix = opt.epoch
-            self.load_networks(load_suffix)
+            self.load_networks(load_suffix, opt.model_suffix)
 
         # self.print_networks(opt.verbose)
 
@@ -244,7 +244,7 @@ class BaseModel(ABC):
         else:
             self.__patch_instance_norm_state_dict(state_dict, getattr(module, key), keys, i + 1)
 
-    def load_networks(self, epoch):
+    def load_networks(self, epoch, param_name=''):
         """Load all the networks from the disk.
 
         Parameters:
@@ -254,7 +254,7 @@ class BaseModel(ABC):
             load_dir = os.path.join(self.opt.checkpoints_dir, self.opt.pretrained_name)
         else:
             load_dir = self.save_dir
-        load_filename = 'epoch_%s.pth' % (epoch)
+        load_filename = 'epoch_%s%s.pth' % (epoch, param_name)
         load_path = os.path.join(load_dir, load_filename)
         state_dict = torch.load(load_path, map_location=self.device)
         print('loading the model from %s' % load_path)

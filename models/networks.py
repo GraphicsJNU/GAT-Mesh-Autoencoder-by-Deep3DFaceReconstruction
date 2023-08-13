@@ -2,13 +2,12 @@
 """
 
 import os
-import numpy as np
 import torch.nn.functional as F
-from torch.nn import init
-import functools
 from torch.optim import lr_scheduler
 import torch
 from torch import Tensor
+import torchvision.models as models
+import torchvision.models._utils as _utils
 import torch.nn as nn
 
 try:
@@ -53,7 +52,7 @@ def get_scheduler(optimizer, opt):
 
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
     elif opt.lr_policy == 'step':
-        scheduler = lr_scheduler.StepLR(optimizer, step_size=opt.lr_decay_epochs, gamma=0.2)
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=opt.lr_decay_epochs, gamma=0.9)
     elif opt.lr_policy == 'plateau':
         scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.2, threshold=0.01, patience=5)
     elif opt.lr_policy == 'cosine':
@@ -63,19 +62,196 @@ def get_scheduler(optimizer, opt):
     return scheduler
 
 
-def define_net_recon(net_recon, use_last_fc=False, init_path=None, fc_dim=257):
-    return ReconNetWrapper(net_recon, use_last_fc=use_last_fc, init_path=init_path, fc_dim=fc_dim)
+def define_my_net_recon(net_recog, pretrained_path, final_layers=None):
+    return MyReconNetWrapper(net_recog, pretrained_path, final_layers=final_layers)
+
+
+def define_net_recon(net_recon, use_last_fc=False, init_path=None, fc_dim=257, final_layers=None):
+    return ReconNetWrapper(net_recon, use_last_fc=use_last_fc, init_path=init_path, fc_dim=fc_dim,
+                           final_layers=final_layers)
 
 
 def define_net_recog(net_recog, pretrained_path=None):
     net = RecogNetWrapper(net_recog=net_recog, pretrained_path=pretrained_path)
     net.eval()
+
     return net
 
 
-class ReconNetWrapper(nn.Module):
+class MyReconNetWrapper(nn.Module):
+    def __init__(self, net_recog, pretrained_path, final_layers: list = None):
+        super(MyReconNetWrapper, self).__init__()
 
-    def __init__(self, net_recon, use_last_fc=False, init_path=None, fc_dim=257):
+        self.net_recog = RecogNetWrapper(net_recog=net_recog, pretrained_path=pretrained_path)
+        self.net_recog.eval()
+
+        if final_layers is None:
+            final_layers = [80, 64, 80, 3, 27, 2, 1]
+        self.final_layers = nn.ModuleList([
+            # conv1x1(self.net_recog.net.features.num_features, i, bias=True) for i in final_layers
+            nn.Linear(self.net_recog.net.features.num_features, i, bias=True) for i in final_layers
+        ])
+        for m in self.final_layers:
+            nn.init.constant_(m.weight, 0.)
+            nn.init.constant_(m.bias, 0.)
+
+    def forward(self, x, M):
+        output = []
+        x = self.net_recog(x, M)
+        for layer in self.final_layers:
+            output.append(layer(x))
+        x = torch.flatten(torch.cat(output, dim=1), 1)
+
+        return x
+
+
+class DynamicGraphConvolution(nn.Module):
+    def __init__(self, in_features, out_features, num_nodes):
+        super(DynamicGraphConvolution, self).__init__()
+
+        self.static_adj = nn.Sequential(
+            nn.Conv1d(num_nodes, num_nodes, 1, bias=False),
+            nn.LeakyReLU(0.2))
+        self.static_weight = nn.Sequential(
+            nn.Conv1d(in_features, out_features, 1),
+            nn.LeakyReLU(0.2))
+
+        self.gap = nn.AdaptiveAvgPool1d(1)
+        self.conv_global = nn.Conv1d(in_features, in_features, 1)
+        self.bn_global = nn.BatchNorm1d(in_features)
+        self.relu = nn.LeakyReLU(0.2)
+
+        self.conv_create_co_mat = nn.Conv1d(in_features * 2, num_nodes, 1)
+        self.dynamic_weight = nn.Conv1d(in_features, out_features, 1)
+
+    def forward_static_gcn(self, x):
+        x = self.static_adj(x.transpose(1, 2))
+        x = self.static_weight(x.transpose(1, 2))
+
+        return x
+
+    def forward_construct_dynamic_graph(self, x):
+        ### Model global representations ###
+        x_glb = self.gap(x)
+        x_glb = self.conv_global(x_glb)
+        x_glb = self.bn_global(x_glb)
+        x_glb = self.relu(x_glb)
+        x_glb = x_glb.expand(x_glb.size(0), x_glb.size(1), x.size(2))
+
+        ### Construct the dynamic correlation matrix ###
+        x = torch.cat((x_glb, x), dim=1)
+        dynamic_adj = self.conv_create_co_mat(x)
+        dynamic_adj = torch.sigmoid(dynamic_adj)
+
+        return dynamic_adj
+
+    def forward_dynamic_gcn(self, x, dynamic_adj):
+        x = torch.matmul(x, dynamic_adj)
+        x = self.relu(x)
+        x = self.dynamic_weight(x)
+        x = self.relu(x)
+        return x
+
+    def forward(self, x):
+        """ D-GCN module
+
+        Shape:
+        - Input: (B, C_in, N) # C_in: 1024, N: num_classes
+        - Output: (B, C_out, N) # C_out: 1024, N: num_classes
+        """
+        out_static = self.forward_static_gcn(x)
+        x = x + out_static  # residual
+        dynamic_adj = self.forward_construct_dynamic_graph(x)
+        x = self.forward_dynamic_gcn(x, dynamic_adj)
+
+        return x
+
+
+class ADD_GCN(nn.Module):
+    def __init__(self, net_recon, init_path=None, final_layers: list = None):
+        super(ADD_GCN, self).__init__()
+
+        if net_recon not in func_dict:
+            return NotImplementedError('network [%s] is not implemented', net_recon)
+
+        if final_layers is None:
+            final_layers = [80, 64, 80, 3, 27, 2, 1]
+
+        func, last_dim = func_dict[net_recon]
+        backbone = func(use_last_fc=False, num_classes=sum(final_layers))
+        if init_path and os.path.isfile(init_path):
+            state_dict = filter_state_dict(torch.load(init_path, map_location='cpu'))
+            backbone.load_state_dict(state_dict)
+            print("loading init net_recon %s from %s" % (net_recon, init_path))
+        self.backbone = backbone
+
+        self.num_classes = 512
+
+        self.fc = nn.Conv2d(last_dim, self.num_classes, (1, 1), bias=False)
+
+        self.conv_transform = nn.Conv2d(last_dim, 1024, (1, 1))
+        self.relu = nn.LeakyReLU(0.2)
+
+        self.dgcn = DynamicGraphConvolution(1024, 1024, self.num_classes)
+
+        self.mask_mat = nn.Parameter(torch.eye(self.num_classes).float())
+        self.last_linear = nn.Conv1d(1024, self.num_classes, 1)
+
+        self.final_layers = nn.ModuleList([
+            # conv1x1(last_dim, i, bias=True) for i in final_layers
+            nn.Linear(self.num_classes, i, bias=True) for i in final_layers
+        ])
+        for m in self.final_layers:
+            nn.init.constant_(m.weight, 0.)
+            nn.init.constant_(m.bias, 0.)
+
+    def forward(self, x):
+        bs = x.size(0)
+
+        # get features
+        features = self.backbone(x)
+
+        # classification_sm
+        # Get another confident scores {s_m}
+        # Input: (B, C_in, H, W) # C_in: 2048
+        # Output: (B, C_out) # C_out: num_classes
+        x = self.fc(features)  # B, num_classes, H, W
+        x = x.view(bs, x.size(1), -1)  # B, num_classes, H * W
+        out1 = x.topk(1, dim=-1)[0].mean(dim=-1)  # B, num_classes
+
+        # SAM(Semantic Attention module)
+        # Input: (B, C_in, H, W)  # C_in: 2048
+        # Output: (B, C_out, N)  # C_out: 1024, N: num_classes
+        mask = self.fc(features)  # B, num_classes, H, W
+        mask = mask.view(bs, mask.size(1), -1)  # B, num_classes, H, W
+        mask = torch.sigmoid(mask)  # B, num_classes, H, W
+        mask = mask.transpose(1, 2)  # B, H * W, num_classes
+
+        x = self.conv_transform(features)  # B, 1024, H, W
+        x = x.view(bs, x.size(1), -1)  # B, 1024, H, W
+        v = torch.matmul(x, mask)  # B, 1024, num_classes
+
+        # Dynamic GCN
+        z = self.dgcn(v)  # B, 1024, num_classes
+        z = v + z
+
+        out2 = self.last_linear(z)  # B, num_classes, num_classes
+        mask_mat = self.mask_mat.detach()  # num_classes, num_classes
+        out2 = (out2 * mask_mat).sum(-1)  # B, num_classes
+
+        out = (out1 + out2) / 2
+
+        output = []
+        for layer in self.final_layers:
+            output.append(layer(out))
+        out = torch.flatten(torch.cat(output, dim=1), 1)
+
+        return out
+
+
+class ReconNetWrapper(nn.Module):
+    def __init__(self, net_recon, use_last_fc=False, init_path=None, fc_dim=257,
+                 final_layers: list = None):
         super(ReconNetWrapper, self).__init__()
         self.use_last_fc = use_last_fc
         self.fc_dim = fc_dim
@@ -89,14 +265,10 @@ class ReconNetWrapper(nn.Module):
             print("loading init net_recon %s from %s" % (net_recon, init_path))
         self.backbone = backbone
         if not use_last_fc:
+            if final_layers is None:
+                final_layers = [80, 64, 80, 3, 27, 2, 1]
             self.final_layers = nn.ModuleList([
-                conv1x1(last_dim, 80, bias=True),  # id layer
-                conv1x1(last_dim, 64, bias=True),  # exp layer
-                conv1x1(last_dim, 80, bias=True),  # tex layer
-                conv1x1(last_dim, 3, bias=True),  # angle layer
-                conv1x1(last_dim, 27, bias=True),  # gamma layer
-                conv1x1(last_dim, 2, bias=True),  # tx, ty
-                conv1x1(last_dim, 1, bias=True)  # tz
+                conv1x1(last_dim, i, bias=True) for i in final_layers
             ])
             for m in self.final_layers:
                 nn.init.constant_(m.weight, 0.)
@@ -130,6 +302,7 @@ class RecogNetWrapper(nn.Module):
     def forward(self, image, M):
         image = self.preprocess(resize_n_crop(image, M, self.input_size))
         id_feature = F.normalize(self.net(image), dim=-1, p=2)
+
         return id_feature
 
 
@@ -375,6 +548,7 @@ class ResNet(nn.Module):
         if self.use_last_fc:
             x = torch.flatten(x, 1)
             x = self.fc(x)
+
         return x
 
     def forward(self, x: Tensor) -> Tensor:

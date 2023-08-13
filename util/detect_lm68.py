@@ -6,6 +6,7 @@ import tensorflow as tf
 from util.preprocess import align_for_lm
 from tqdm import tqdm
 from shutil import move
+from mtcnn import MTCNN
 
 mean_face = np.loadtxt('util/test_mean_face.txt')
 mean_face = mean_face.reshape([68, 2])
@@ -67,6 +68,7 @@ def detect_68p(img_path, sess, input_op, output_op):
     if not os.path.isdir(save_path):
         os.makedirs(save_path)
 
+    detector = MTCNN()
     for i in tqdm(range(0, len(names)), desc='detecting landmarks......'):
         name = names[i]
         # print('%05d' % (i), ' ', name)
@@ -74,10 +76,38 @@ def detect_68p(img_path, sess, input_op, output_op):
         txt_name = '.'.join(name.split('.')[:-1]) + '.txt'
         full_txt_name = os.path.join(img_path, 'detections', txt_name)  # 5 facial landmark path for each image
 
+        if os.path.isfile(os.path.join(save_path, txt_name)):
+            continue
+
+        image = cv2.imread(full_image_name)
+        if os.path.isfile(os.path.join(img_path, name[:name.rfind('.')] + '.mat')):
+            image_data = loadmat(os.path.join(img_path, name[:name.rfind('.')] + '.mat'))
+            lms = None
+            if "pt3d_68" in image_data.keys():
+                lms = image_data["pt3d_68"][:2, :].T
+            elif "pt2d" in image_data.keys():
+                lms = image_data["pt2d"][:2, :].T
+
+            if lms is not None:
+                lms[:, 1] = image.shape[0] - lms[:, 1]
+                save_label(lms, os.path.join(save_path, txt_name))
+                continue
+
         # if an image does not have detected 5 facial landmarks, remove it from the training list
         if not os.path.isfile(full_txt_name):
-            move(full_image_name, os.path.join(remove_path, name))
-            continue
+            img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            result = detector.detect_faces(img)
+            if len(result) > 1:
+                result.sort(key=lambda x: x['box'][2] * x['box'][3], reverse=True)
+            elif len(result) == 0:
+                move(full_image_name, os.path.join(remove_path, name))
+                continue
+
+            lms = result[0]['keypoints']
+            seq = [lms['left_eye'], lms['right_eye'], lms['nose'], lms['mouth_left'], lms['mouth_right']]
+            with open(full_txt_name, 'w') as f:
+                for lm in seq:
+                    f.write(f'{lm[0]} {lm[1]}\n')
 
         # load data
         img, five_points = load_data(full_image_name, full_txt_name)

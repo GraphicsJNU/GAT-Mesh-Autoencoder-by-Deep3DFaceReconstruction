@@ -5,8 +5,9 @@ import torch
 from .base_model import BaseModel
 from . import networks
 from .bfm import ProposalFaceModel
-from .losses import perceptual_loss, photo_loss, reg_loss, reflectance_loss, landmark_loss
+from .losses import perceptual_loss, photo_loss, reg_loss, reflectance_loss, landmark_loss, encoding_loss
 from util import util
+# from util.pytorch3d import MeshRenderer
 from util.nvdiffrast import MeshRenderer
 from util.preprocess import estimate_norm_torch
 
@@ -25,7 +26,8 @@ class ProposalModel(BaseModel):
         parser.add_argument('--use_last_fc', type=util.str2bool, nargs='?', const=True, default=False,
                             help='zero initialize the last fc')
         parser.add_argument('--bfm_folder', type=str, default='BFM')
-        parser.add_argument('--bfm_model', type=str, default='BFM_model_front.mat', help='bfm model')
+        # parser.add_argument('--bfm_model', type=str, default='facewarehouse_model_front.mat', help='bfm model')
+        parser.add_argument('--bfm_model', type=str, default='BFM_model_for_300W_3D.mat', help='bfm model')
 
         # renderer parameters
         parser.add_argument('--focal', type=float, default=1015.)
@@ -57,7 +59,7 @@ class ProposalModel(BaseModel):
             parser.add_argument('--w_color', type=float, default=1.92, help='weight for loss loss')
             parser.add_argument('--w_reg', type=float, default=3.0e-4, help='weight for reg loss')
             parser.add_argument('--w_id', type=float, default=1.0, help='weight for id_reg loss')
-            parser.add_argument('--w_exp', type=float, default=0.8, help='weight for exp_reg loss')
+            parser.add_argument('--w_exp', type=float, default=0.0, help='weight for exp_reg loss')
             parser.add_argument('--w_tex', type=float, default=1.7e-2, help='weight for tex_reg loss')
             parser.add_argument('--w_gamma', type=float, default=10.0, help='weight for gamma loss')
             parser.add_argument('--w_lm', type=float, default=1.6e-3, help='weight for lm loss')
@@ -71,6 +73,7 @@ class ProposalModel(BaseModel):
             parser.set_defaults(
                 use_crop_face=True, use_predef_M=False
             )
+
         return parser
 
     def __init__(self, opt):
@@ -89,18 +92,34 @@ class ProposalModel(BaseModel):
         self.model_names = ['net_recon']
         self.parallel_names = self.model_names + ['renderer']
 
+        id_dim, tex_dim, angle_dim, gamma_dim, xy_dim, z_dim = 256, 80, 3, 27, 2, 1
+        # id_dim, tex_dim, angle_dim, gamma_dim, xy_dim, z_dim = 64, 80, 3, 27, 2, 1
+        fc_dim = id_dim + tex_dim + angle_dim + gamma_dim + xy_dim + z_dim
+        final_layers = [id_dim, tex_dim, angle_dim, gamma_dim, xy_dim, z_dim]
         self.net_recon = networks.define_net_recon(
-            net_recon=opt.net_recon, use_last_fc=opt.use_last_fc, init_path=opt.init_path, fc_dim=369
+            net_recon=opt.net_recon, use_last_fc=opt.use_last_fc, init_path=opt.init_path, fc_dim=fc_dim,
+            final_layers=final_layers
         )
+
+        # self.net_recon = networks.define_my_net_recon(
+        #     net_recog=opt.net_recog, pretrained_path=opt.net_recog_path,
+        #     final_layers=final_layers
+        # )
+
+        # self.net_recon = networks.ADD_GCN('resnet50', final_layers=final_layers)
 
         self.facemodel = ProposalFaceModel(
             bfm_folder=opt.bfm_folder, camera_distance=opt.camera_d, focal=opt.focal, center=opt.center,
-            is_train=self.isTrain, default_name=opt.bfm_model
+            is_train=self.isTrain, default_name=opt.bfm_model,
+            coeff_dims=final_layers
         )
 
         fov = 2 * np.arctan(opt.center / opt.focal) * 180 / np.pi
         self.renderer = MeshRenderer(
-            rasterize_fov=fov, znear=opt.z_near, zfar=opt.z_far, rasterize_size=int(2 * opt.center),
+            rasterize_fov=fov,
+            znear=opt.z_near,
+            zfar=opt.z_far,
+            rasterize_size=int(2 * opt.center),
             use_opengl=opt.use_opengl
         )
 
@@ -110,6 +129,7 @@ class ProposalModel(BaseModel):
             self.net_recog = networks.define_net_recog(
                 net_recog=opt.net_recog, pretrained_path=opt.net_recog_path
             )
+
             # loss func name: (compute_%s_loss) % loss_name
             self.compute_feat_loss = perceptual_loss
             self.comupte_color_loss = photo_loss
@@ -122,6 +142,11 @@ class ProposalModel(BaseModel):
             self.parallel_names += ['net_recog']
         # Our program will automatically call <model.setup> to define schedulers, load networks, and print networks
 
+    def train(self):
+        super().train()
+
+        self.facemodel.decoder_layer.eval()
+
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
 
@@ -133,12 +158,15 @@ class ProposalModel(BaseModel):
         self.gt_lm = input['lms'].to(self.device) if 'lms' in input else None
         self.trans_m = input['M'].to(self.device) if 'M' in input else None
         self.image_paths = input['im_paths'] if 'im_paths' in input else None
+        # self.gt_encoded_vec = input['encoded_vec'] if 'encoded_vec' in input else None
 
     def forward(self):
         output_coeff = self.net_recon(self.input_img)
+        # output_coeff = self.net_recon(self.input_img, self.trans_m)
         self.facemodel.to(self.device)
         self.pred_vertex, self.pred_tex, self.pred_color, self.pred_lm = \
             self.facemodel.compute_for_render(output_coeff)
+
         self.pred_mask, _, self.pred_face = self.renderer(
             self.pred_vertex, self.facemodel.face_buf, feat=self.pred_color)
 
@@ -148,6 +176,7 @@ class ProposalModel(BaseModel):
         """Calculate losses, gradients, and update network weights; called in every training iteration"""
 
         assert self.net_recog.training == False
+
         trans_m = self.trans_m
         if not self.opt.use_predef_M:
             trans_m = estimate_norm_torch(self.pred_lm, self.input_img.shape[-2])
@@ -156,7 +185,7 @@ class ProposalModel(BaseModel):
         gt_feat = self.net_recog(self.input_img, self.trans_m)
         self.loss_feat = self.opt.w_feat * self.compute_feat_loss(pred_feat, gt_feat)
 
-        face_mask = self.pred_mask
+        face_mask = self.pred_mask.detach()
         if self.opt.use_crop_face:
             face_mask, _, _ = self.renderer(self.pred_vertex, self.facemodel.front_face_buf)
 
@@ -188,6 +217,7 @@ class ProposalModel(BaseModel):
         device = self.device
         with torch.no_grad():
             input_img_numpy = 255. * self.input_img.detach().cpu().permute(0, 2, 3, 1).numpy()
+
             output_vis = self.pred_face * self.pred_mask + (1 - self.pred_mask) * self.input_img
             output_vis_numpy_raw = 255. * output_vis.detach().cpu().permute(0, 2, 3, 1).numpy()
 

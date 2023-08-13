@@ -114,7 +114,7 @@ def main(args):
 
     if cfg.optimizer == "sgd":
         module_partial_fc = PartialFC_V2(
-            margin_loss, cfg.embedding_size, cfg.num_classes,
+            margin_loss, cfg.embedding_size, cfg.last_dim,
             cfg.sample_rate, False)
         module_partial_fc.train().cuda()
         # TODO the params of partial fc must be last in the params list
@@ -124,7 +124,7 @@ def main(args):
 
     elif cfg.optimizer == "adamw":
         module_partial_fc = PartialFC_V2(
-            margin_loss, cfg.embedding_size, cfg.num_classes,
+            margin_loss, cfg.embedding_size, cfg.last_dim,
             cfg.sample_rate, False)
         module_partial_fc.train().cuda()
         opt = torch.optim.AdamW(

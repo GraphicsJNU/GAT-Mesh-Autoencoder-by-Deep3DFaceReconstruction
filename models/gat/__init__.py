@@ -1,3 +1,3 @@
-from .networks import AutoEncoder, CnnAutoEncoder, EncoderLayer, Reconstructor, DecoderLayer
+from .networks import AutoEncoder, VariationalAutoEncoder, Encoder, DecoderLayer
 
-__all__ = [AutoEncoder, CnnAutoEncoder, EncoderLayer, Reconstructor, DecoderLayer]
+__all__ = [AutoEncoder, VariationalAutoEncoder, Encoder, DecoderLayer]

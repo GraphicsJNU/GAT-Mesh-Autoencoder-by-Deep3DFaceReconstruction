@@ -20,7 +20,7 @@ config.verbose = 2000
 config.dali = False
 
 config.rec = "/train_tmp/glint360k"
-config.num_classes = 360232
+config.last_dim = 360232
 config.num_image = 17091657
 config.num_epoch = 20
 config.warmup_epoch = 0

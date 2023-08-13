@@ -13,8 +13,6 @@ from util.util import genvalconf
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
-from tqdm import tqdm
-
 
 def setup(rank, world_size, port):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -45,7 +43,15 @@ def main(rank, world_size, train_opt):
     model = create_model(train_opt)  # create a model given train_opt.model and other options
     model.setup(train_opt)
     model.device = device
-    model.parallelize()
+
+    for epoch in range(train_opt.n_epochs - 1, 0, -1):
+        base_path = './checkpoints/%s/epoch_%d%s.pth' % (train_opt.name, epoch, train_opt.model_suffix)
+        if os.path.exists(base_path):
+            model.load_networks(epoch, train_opt.model_suffix)
+            train_opt.epoch_count = epoch + 1
+            break
+
+    model.parallelize(False)
 
     if rank == 0:
         print('The batch number of training images = %d\n, \

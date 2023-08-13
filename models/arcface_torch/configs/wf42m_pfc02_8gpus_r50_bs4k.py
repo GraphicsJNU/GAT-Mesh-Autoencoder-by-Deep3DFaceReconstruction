@@ -20,7 +20,7 @@ config.verbose = 10000
 config.dali = False
 
 config.rec = "/train_tmp/WebFace42M"
-config.num_classes = 2059906
+config.last_dim = 2059906
 config.num_image = 42474557
 config.num_epoch = 20
 config.warmup_epoch = 2

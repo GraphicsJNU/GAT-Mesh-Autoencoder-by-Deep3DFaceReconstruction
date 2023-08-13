@@ -16,7 +16,7 @@ config.batch_size = 512 # total_batch_size = batch_size * num_gpus
 config.lr = 0.1  # batch size is 512
 
 config.rec = "synthetic"
-config.num_classes = 30 * 10000
+config.last_dim = 30 * 10000
 config.num_image = 100000
 config.num_epoch = 30
 config.warmup_epoch = -1

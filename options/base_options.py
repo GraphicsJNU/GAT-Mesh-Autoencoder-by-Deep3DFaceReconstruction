@@ -53,6 +53,8 @@ class BaseOptions:
         parser.add_argument('--suffix', default='', type=str,
                             help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{load_size}')
 
+        parser.add_argument('--model_suffix', type=str, default='', help='train type')
+
         self.initialized = True
 
         return parser
