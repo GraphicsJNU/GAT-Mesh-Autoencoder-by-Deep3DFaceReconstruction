@@ -161,6 +161,8 @@ class MyVisualizer:
         self.opt = opt  # cache the optio
         self.name = opt.name
         self.img_dir = os.path.join(opt.checkpoints_dir, opt.name, 'results')
+        if not os.path.exists(self.img_dir):
+            os.makedirs(self.img_dir)
         
         if opt.phase != 'test':
             self.writer = SummaryWriter(os.path.join(opt.checkpoints_dir, opt.name, 'logs'))

@@ -214,7 +214,7 @@ def align_img(img, lm, lm3D, mask=None, target_size=224., rescale_factor=102.):
 
 
 # utils for face recognition model
-def estimate_norm(lm_68p, H):
+def estimate_norm(lm, H):
     # https://github.com/deepinsight/insightface/blob/c61d3cd208a603dfa4a338bd743b320ce3e94730/recognition/common/face_align.py#L68
     """
     Return:
@@ -223,7 +223,9 @@ def estimate_norm(lm_68p, H):
         lm                 --numpy.array  (68, 2), y direction is opposite to v direction
         H                  --int/float , image height
     """
-    lm = extract_5p(lm_68p)
+
+    if lm.shape[0] != 5:
+        lm = extract_5p(lm)
     lm[:, -1] = H - 1 - lm[:, -1]
     tform = trans.SimilarityTransform()
     src = np.array(

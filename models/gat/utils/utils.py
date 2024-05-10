@@ -14,7 +14,7 @@ def makedirs(folder):
 
 
 def to_sparse(spmat):
-    return torch.sparse.FloatTensor(
+    return torch.sparse_coo_tensor(
         torch.from_numpy(np.array([spmat.tocoo().row, spmat.tocoo().col], dtype=np.int64)),
         torch.FloatTensor(spmat.tocoo().data), torch.Size(spmat.tocoo().shape)
     )

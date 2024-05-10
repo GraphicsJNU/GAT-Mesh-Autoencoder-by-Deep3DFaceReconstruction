@@ -52,8 +52,19 @@ class BaseOptions:
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         parser.add_argument('--suffix', default='', type=str,
                             help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{load_size}')
-
-        parser.add_argument('--model_suffix', type=str, default='', help='train type')
+        
+        # ablation of proposal method
+        parser.add_argument('--ae_dim', type=int, default=128, help='dimension of Auto Encoder')
+        parser.add_argument('--enc_conv', type=str, default='', help='internal network type of encoder layer')
+        parser.add_argument('--dec_conv', type=str, default='', help='internal network type of decoder layer')
+        parser.add_argument('--enc_k', type=int, default=6, help='variable k of encoder layer')
+        parser.add_argument('--dec_k', type=int, default=6, help='variable k of decoder layer')
+        parser.add_argument('--shape_fc_train', type=util.str2bool, default=False,
+                            help='only train fully connected layer in shape decoder')
+        parser.add_argument('--texture_fc_train', type=util.str2bool, default=False,
+                            help='only train fully connected layer in texture decoder')
+        parser.add_argument('--w_kl', type=float, default=1e-5, help='weight of Kullback-Leibler divergence')
+        parser.add_argument('--ae_pretrained_epoch', type=int, default=0, help='pretrained epoch of auto encoder')
 
         self.initialized = True
 

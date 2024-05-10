@@ -56,6 +56,7 @@ def photo_loss(imageA, imageB, mask, eps=1e-6):
     """
     loss = torch.sqrt(eps + torch.sum((imageA - imageB) ** 2, dim=1, keepdims=True)) * mask
     loss = torch.sum(loss) / torch.max(torch.sum(mask), torch.tensor(1.0).to(mask.device))
+
     return loss
 
 
@@ -69,8 +70,15 @@ def landmark_loss(predict_lm, gt_lm, weight=None):
     """
     if not weight:
         weight = np.ones([68])
-        weight[28:31] = 20
-        weight[-8:] = 20
+        # weight[28:31] = 20
+        # weight[-8:] = 20
+
+        weight[:17] = 20  # 턱선
+        weight[17:27] = 10  # 눈썹
+        weight[28:36] = 5  # 코
+        weight[36:48] = 20  # 양쪽 눈
+        weight[48:] = 10  # 입술
+
         weight = np.expand_dims(weight, 0)
         weight = torch.tensor(weight).to(predict_lm.device)
     loss = torch.sum((predict_lm - gt_lm) ** 2, dim=-1) * weight
@@ -105,7 +113,7 @@ def reg_loss(coeffs_dict, opt=None):
     # creg_loss = w_id * torch.sum(coeffs_dict['id'] ** 2) +  \
     #        w_exp * torch.sum(coeffs_dict['exp'] ** 2) + \
     #        w_tex * torch.sum(coeffs_dict['tex'] ** 2)
-    creg_loss = creg_loss / coeffs_dict['id'].shape[0]
+    # creg_loss = creg_loss / coeffs_dict['id'].shape[0]
 
     # gamma regularization to ensure a nearly-monochromatic light
     gamma = coeffs_dict['gamma'].reshape([-1, 3, 9])
@@ -129,7 +137,3 @@ def reflectance_loss(texture, mask):
     loss = torch.sum(((texture - texture_mean) * mask) ** 2) / (texture.shape[0] * torch.sum(mask))
 
     return loss
-
-
-def encoding_loss(pred_shape_code, shape_code):
-    return nn.functional.l1_loss(pred_shape_code, shape_code)

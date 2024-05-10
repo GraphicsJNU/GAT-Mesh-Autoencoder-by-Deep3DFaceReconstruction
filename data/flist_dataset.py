@@ -81,7 +81,6 @@ class FlistDataset(BaseDataset):
         msk_path = self.msk_paths[index % self.size]  # make sure index is within then range
         img_path = msk_path.replace('mask/', '')
         lm_path = '.'.join(msk_path.replace('mask', 'landmarks').split('.')[:-1]) + '.txt'
-        pt_path = img_path.replace('.png', '.pt')
 
         raw_img = Image.open(img_path).convert('RGB')
         raw_msk = Image.open(msk_path).convert('RGB')
@@ -100,13 +99,11 @@ class FlistDataset(BaseDataset):
         msk_tensor = transform(msk)[:1, ...]
         lm_tensor = parse_label(lm)
         M_tensor = parse_label(M)
-        # encoded_vec_tensor = torch.load(pt_path).squeeze(0) if os.path.exists(pt_path) else None
 
         return {'imgs': img_tensor,
                 'lms': lm_tensor,
                 'msks': msk_tensor,
                 'M': M_tensor,
-                # 'encoded_vec': encoded_vec_tensor,
                 'im_paths': img_path,
                 'aug_flag': aug_flag,
                 'dataset': self.name}

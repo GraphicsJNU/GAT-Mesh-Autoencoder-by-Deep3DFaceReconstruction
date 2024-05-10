@@ -66,24 +66,44 @@ if __name__ == '__main__':
     #     shutil.move('./datasets/CelebA/remove/%06d.jpg' % i, './datasets/CelebA/%06d.jpg' % i)
 
     # Facewarehouse 데이터셋 조정
-    # from mtcnn import MTCNN
+    '''
+    from mtcnn import MTCNN
+    
+    for i in range(20):
+        for j in range(1, 151):
+            if not os.path.exists(f'./datasets/Facewarehouse/detections/{j}_{i}.txt') or True:
+                img = cv2.cvtColor(cv2.imread(f'./datasets/Facewarehouse/{j}_{i}.png'), cv2.COLOR_BGR2RGB)
+                detector = MTCNN()
+                result = detector.detect_faces(img)
+                if len(result) > 1:
+                    result.sort(key=lambda x:x['box'][2] * x['box'][3], reverse=True)
+                elif len(result) == 0:
+                    print(j, i)
+                    exit(0)
+                lms = result[0]['keypoints']
+                seq = [lms['left_eye'], lms['right_eye'], lms['nose'], lms['mouth_left'], lms['mouth_right']]
+                with open(f'./datasets/Facewarehouse/detections/{j}_{i}.txt', 'w') as f:
+                    for lm in seq:
+                        f.write(f'{lm[0]} {lm[1]}\n')
+    '''
+
+    # from glob import glob
+    # for a in glob('./datasets/test/*.png'):
+    #     img = cv2.cvtColor(cv2.imread(a), cv2.COLOR_BGR2RGB)
+    #     detector = MTCNN()
+    #     path = a[:a.rfind(os.path.sep)]
+    #     file_name = a[a.rfind(os.path.sep) + 1:a.rfind(".")]
+    #     result = detector.detect_faces(img)
+    #     if len(result) > 1:
+    #         result.sort(key=lambda x: x['box'][2] * x['box'][3], reverse=True)
+    #     elif len(result) == 0:
+    #         continue
     #
-    # for i in range(20):
-    #     for j in range(1, 151):
-    #         if not os.path.exists(f'./datasets/Facewarehouse/detections/{j}_{i}.txt'):
-    #             img = cv2.cvtColor(cv2.imread(f'./datasets/Facewarehouse/{j}_{i}.png'), cv2.COLOR_BGR2RGB)
-    #             detector = MTCNN()
-    #             result = detector.detect_faces(img)
-    #             if len(result) > 1:
-    #                 result.sort(key=lambda x:x['box'][2] * x['box'][3], reverse=True)
-    #             elif len(result) == 0:
-    #                 print(j, i)
-    #                 exit(0)
-    #             lms = result[0]['keypoints']
-    #             seq = [lms['left_eye'], lms['right_eye'], lms['nose'], lms['mouth_left'], lms['mouth_right']]
-    #             with open(f'./datasets/Facewarehouse/detections/{j}_{i}.txt', 'w') as f:
-    #                 for lm in seq:
-    #                     f.write(f'{lm[0]} {lm[1]}\n')
+    #     lms = result[0]['keypoints']
+    #     seq = [lms['left_eye'], lms['right_eye'], lms['nose'], lms['mouth_left'], lms['mouth_right']]
+    #     with open(f'{path}/detections/{a[a.rfind(os.path.sep) + 1:a.rfind(".")]}.txt', 'w') as f:
+    #         for lm in seq:
+    #             f.write(f'{lm[0]} {lm[1]}\n')
 
     # facewarehouse_model_info.mat 변경
     # from scipy.io import loadmat, savemat
@@ -105,40 +125,99 @@ if __name__ == '__main__':
     # from glob import glob
     # import shutil
 
-    # folders = ['300W-LP', 'AFLW2000-3D']
-    # fps = glob(f'.\\datasets\\300W-3D\\*\\*.mat')
-    # for fp in tqdm(fps):
-    #     shutil.copy(fp, f'.\\datasets\\300W-3D\\' + fp[fp.rfind('\\') + 1:])
-    # fps = glob(f'.\\datasets\\300W-3D\\*\\*.jpg')
-    # for fp in tqdm(fps):
-    #     shutil.copy(fp, f'.\\datasets\\300W-3D\\' + fp[fp.rfind('\\') + 1:])
+    '''
+    folders = ['300W-LP', 'AFLW2000-3D']
+    fps = glob(f'.\\datasets\\300W-3D\\*\\*.mat')
+    for fp in tqdm(fps):
+        shutil.copy(fp, f'.\\datasets\\300W-3D\\' + fp[fp.rfind('\\') + 1:])
+    fps = glob(f'.\\datasets\\300W-3D\\*\\*.jpg')
+    for fp in tqdm(fps):
+        shutil.copy(fp, f'.\\datasets\\300W-3D\\' + fp[fp.rfind('\\') + 1:])
+    '''
 
-    # folders = opt.img_folder
-    # for folder in folders:
-    #     fps = glob(f'.\\datasets\\{folder}\\*.jpg')
-    #     for fp in tqdm(fps):
-    #         filename = fp[fp.rfind('\\') + 1:]
-    #         filename = filename[:filename.rfind('.')]
-    #         txt_file = f'.\\datasets\\{folder}\\detections\\{filename}.txt'
-    #         if not os.path.exists(txt_file):
-    #             img = cv2.cvtColor(cv2.imread(f'.\\datasets\\{folder}\\{filename}.jpg'), cv2.COLOR_BGR2RGB)
-    #             # boxes, probs, points = mtcnn.detect(img, True)
-    #             # print(points)
-    #             # exit(0)
-    #             # detector = MTCNN()
-    #             result = detector.detect_faces(img)
-    #             if len(result) > 1:
-    #                 result.sort(key=lambda x: x['box'][2] * x['box'][3], reverse=True)
-    #             elif len(result) == 0:
-    #                 continue
+    '''
+    folders = opt.img_folder
+    for folder in folders:
+        fps = glob(f'.\\datasets\\{folder}\\*.jpg')
+        for fp in tqdm(fps):
+            filename = fp[fp.rfind('\\') + 1:]
+            filename = filename[:filename.rfind('.')]
+            txt_file = f'.\\datasets\\{folder}\\detections\\{filename}.txt'
+            if not os.path.exists(txt_file):
+                img = cv2.cvtColor(cv2.imread(f'.\\datasets\\{folder}\\{filename}.jpg'), cv2.COLOR_BGR2RGB)
+                # boxes, probs, points = mtcnn.detect(img, True)
+                # print(points)
+                # exit(0)
+                # detector = MTCNN()
+                result = detector.detect_faces(img)
+                if len(result) > 1:
+                    result.sort(key=lambda x: x['box'][2] * x['box'][3], reverse=True)
+                elif len(result) == 0:
+                    continue
+
+                lms = result[0]['keypoints']
+                seq = [lms['left_eye'], lms['right_eye'], lms['nose'], lms['mouth_left'], lms['mouth_right']]
+                with open(txt_file, 'w') as f:
+                    for lm in seq:
+                        f.write(f'{lm[0]} {lm[1]}\n')
+    '''
+
+    # now 챌린지 데이터
+    # from glob import glob
+    # from mtcnn import MTCNN
+    # detector = MTCNN()
+    # for a in glob(f'./datasets/Now/*.jpg'):
+    #     file_name = a[a.rfind("\\") + 1:len(a) - 4]
+    #     img = cv2.cvtColor(cv2.imread(a), cv2.COLOR_BGR2RGB)
+    #     result = detector.detect_faces(img)
+    #     lms = result[0]['keypoints']
+    #     seq = [lms['left_eye'], lms['right_eye'], lms['nose'], lms['mouth_left'], lms['mouth_right']]
+    #     with open('./datasets/Now/detections/' + file_name + ".txt", 'w') as f:
+    #         for lm in seq:
+    #             f.write(f'{lm[0]} {lm[1]}\n')
+
+    # from glob import glob
+    # import shutil
+    # import random
+    # from psbody.mesh import Mesh
+    # from tqdm import tqdm
+    # lms_idx = []
+    # with open('./datasets/Facewarehouse/landmarks_68.txt', 'r') as f:
+    #     lines = f.readlines()
+    #     for a in lines:
+    #         lms_idx.append(int(a[:-1]) - 1)
     #
-    #             lms = result[0]['keypoints']
-    #             seq = [lms['left_eye'], lms['right_eye'], lms['nose'], lms['mouth_left'], lms['mouth_right']]
-    #             with open(txt_file, 'w') as f:
-    #                 for lm in seq:
-    #                     f.write(f'{lm[0]} {lm[1]}\n')
+    # for a in tqdm(glob('./datasets/Facewarehouse/*.obj')):
+    #     m = Mesh(filename=a)
+    #     lms_vtx = m.v[lms_idx, :]
+    #     with open(a[:-4] + '.txt', 'w') as f:
+    #         for b in range(len(lms_idx)):
+    #             f.write('{:.6f} {:.6f} {:.6f}\n'.format(lms_vtx[b, 0], lms_vtx[b, 1], lms_vtx[b, 2]))
 
+    # datalist = [[i, j] for i in range(1, 151) for j in range(20)]
+    # random.shuffle(datalist)
+    # datalist = datalist[:int(len(datalist) * 0.1)]
+    # base_path = './datasets/Facewarehouse'
+    # now_path = f'{base_path}/Now'
+    # scan_path = f'{now_path}/scans'
+    # scans_lmks_onlypp_path = f'{now_path}/scans_lmks_onlypp'
+    # os.mkdir(scan_path)
+    # os.mkdir(scans_lmks_onlypp_path)
+    # os.mkdir(f'{now_path}/img')
+    # with open(f'{base_path}/Now/imagepathsvalidation.txt', 'w') as f:
+    #     for i, j in datalist:
+    #         f.write(f'{i}_{j}/selfie/{i}_{j}.png\n')
+    #
+    #         os.mkdir(f'{scan_path}/{i}_{j}')
+    #         shutil.copy(f'{base_path}/{i}_{j}.obj', f'{scan_path}/{i}_{j}/{i}_{j}.obj')
+    #
+    #         os.mkdir(f'{scans_lmks_onlypp_path}/{i}_{j}')
+    #         shutil.copy(f'{base_path}/{i}_{j}.txt', f'{scans_lmks_onlypp_path}/{i}_{j}/{i}_{j}.txt')
+    #
+    #         shutil.copy(f'{base_path}/{i}_{j}.png', f'{now_path}/img/{i}_{j}.png')
+    # exit(0)
     # https://github.com/yfeng95/face3d
+    '''
     from scipy.io import loadmat, savemat
     import util.mesh as mesh
     import os.path as osp
@@ -192,6 +271,7 @@ if __name__ == '__main__':
     }
 
     savemat(get_path('BFM_model_for_300W_3D.mat'), save_data)
+    '''
 
     # with np.load('./BFM/earth.npz') as f:
     #     pos_idx, pos, uv_idx, uv, tex = f.values()
@@ -225,3 +305,4 @@ if __name__ == '__main__':
 
     # AFLW2000-3D 300W-3D CelebA Facewarehouse
     data_prepare([os.path.join(opt.data_root, folder) for folder in opt.img_folder], opt.mode)
+    # data_prepare(['datasets\\Facewarehouse'], opt.mode)

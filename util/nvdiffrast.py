@@ -45,7 +45,7 @@ class MeshRenderer(nn.Module):
             tri             -- torch.tensor, size (B, M, 3) or (M, 3), triangles
             feat(optional)  -- torch.tensor, size (B, C), features
         """
-        device = vertex.device
+        device = vertex.device if vertex.device != torch.device('cpu') else None
         rsize = int(self.rasterize_size)
         ndc_proj = self.ndc_proj.to(device)
         # trans to homogeneous coordinates of 3d vertices, the direction of y is the same as v
@@ -61,7 +61,11 @@ class MeshRenderer(nn.Module):
             else:
                 self.ctx = dr.RasterizeCudaContext(device=device)
                 ctx_str = "cuda"
-            print("create %s ctx on device cuda:%d" % (ctx_str, device.index))
+
+            if device is not None:
+                print("create %s ctx on device cuda:%d" % (ctx_str, device.index))
+            else:
+                print("create %s ctx on device cpu" % (ctx_str))
 
         ranges = None
         if isinstance(tri, List) or len(tri.shape) == 3:

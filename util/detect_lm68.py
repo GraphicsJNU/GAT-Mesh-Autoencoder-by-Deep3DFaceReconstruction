@@ -98,7 +98,8 @@ def detect_68p(img_path, sess, input_op, output_op):
             img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             result = detector.detect_faces(img)
             if len(result) > 1:
-                result.sort(key=lambda x: x['box'][2] * x['box'][3], reverse=True)
+                # result.sort(key=lambda x: x['box'][2] * x['box'][3], reverse=True)
+                result.sort(key=lambda x: x['confidence'], reverse=True)
             elif len(result) == 0:
                 move(full_image_name, os.path.join(remove_path, name))
                 continue

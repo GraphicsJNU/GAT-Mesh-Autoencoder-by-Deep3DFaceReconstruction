@@ -13,6 +13,8 @@ from util.util import genvalconf
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 
 def setup(rank, world_size, port):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -41,17 +43,39 @@ def main(rank, world_size, train_opt):
         len(train_dataset) // train_opt.batch_size, len(val_dataset) // val_opt.batch_size
 
     model = create_model(train_opt)  # create a model given train_opt.model and other options
-    model.setup(train_opt)
+    if train_opt.name == 'original':
+        param_name = ''
+    elif train_opt.name == 'proposal':
+        param_name = ('_ae_{:d}_{}_{:d}_{}_{:d}_{:.0e}_{}_{}_{}'
+                      .format(train_opt.ae_dim,
+                              train_opt.enc_conv, train_opt.enc_k, train_opt.dec_conv, train_opt.dec_k,
+                              train_opt.w_kl, train_opt.ae_pretrained_epoch,
+                              train_opt.shape_fc_train, train_opt.texture_fc_train))
+    elif train_opt.name == 'cmd':
+        param_name = ('_ae_{:d}_{}_{:d}_{}_{:d}_{:.0e}_{}_{}'
+                      .format(train_opt.ae_dim,
+                              train_opt.enc_conv, train_opt.enc_k, train_opt.dec_conv, train_opt.dec_k,
+                              train_opt.w_kl, train_opt.ae_pretrained_epoch,
+                              train_opt.shape_fc_train))
+    elif train_opt.name == 'proposal_mobilenet_v2':
+        param_name = ('_ae_{:d}_{}_{:d}_{}_{:d}_{:.0e}_{}_{}_{}'
+                      .format(train_opt.ae_dim,
+                              train_opt.enc_conv, train_opt.enc_k, train_opt.dec_conv, train_opt.dec_k,
+                              train_opt.w_kl, train_opt.ae_pretrained_epoch,
+                              train_opt.shape_fc_train, train_opt.texture_fc_train))
+    else:
+        raise Exception('Not exist model')
+    model.setup(train_opt, param_name)
     model.device = device
 
-    for epoch in range(train_opt.n_epochs - 1, 0, -1):
-        base_path = './checkpoints/%s/epoch_%d%s.pth' % (train_opt.name, epoch, train_opt.model_suffix)
+    for epoch in range(train_opt.n_epochs, 0, -1):
+        base_path = './checkpoints/%s/epoch_%d%s.pth' % (train_opt.name, epoch, param_name)
         if os.path.exists(base_path):
-            model.load_networks(epoch, train_opt.model_suffix)
             train_opt.epoch_count = epoch + 1
+            model.load_networks(epoch, param_name)
             break
 
-    model.parallelize(False)
+    model.parallelize(True)
 
     if rank == 0:
         print('The batch number of training images = %d\n, \
@@ -117,7 +141,7 @@ def main(rank, world_size, train_opt):
                     model.eval()
                     for j, val_data in enumerate(val_dataset):
                         model.set_input(val_data)
-                        model.optimize_parameters(isTrain=False)
+                        model.optimize_parameters(is_train=False)
                         if rank == 0 and j < train_opt.vis_batch_nums:
                             model.compute_visuals()
                             visualizer.display_current_results(model.get_current_visuals(), total_iters, epoch,
@@ -145,12 +169,12 @@ def main(rank, world_size, train_opt):
             if use_ddp:
                 dist.barrier()
 
-            if rank == 0 and (
-                    total_iters == batch_size or total_iters % train_opt.save_latest_freq == 0):  # cache our latest model every <save_latest_freq> iterations
-                print('saving the latest model (epoch %d, total_iters %d)' % (epoch, total_iters))
-                print(train_opt.name)  # it's useful to occasionally show the experiment name on console
-                save_suffix = 'iter_%d' % total_iters if train_opt.save_by_iter else 'latest'
-                model.save_networks(save_suffix)
+            # if rank == 0 and (
+            #         total_iters == batch_size or total_iters % train_opt.save_latest_freq == 0):  # cache our latest model every <save_latest_freq> iterations
+            #     print('saving the latest model (epoch %d, total_iters %d)' % (epoch, total_iters))
+            #     print(train_opt.name)  # it's useful to occasionally show the experiment name on console
+            #     save_suffix = 'iter_%d' % total_iters if train_opt.save_by_iter else 'latest'
+            #     model.save_networks(save_suffix)
 
             if use_ddp:
                 dist.barrier()
@@ -162,9 +186,9 @@ def main(rank, world_size, train_opt):
         model.update_learning_rate()  # update learning rates at the end of every epoch.
 
         if rank == 0 and epoch % train_opt.save_epoch_freq == 0:  # cache our model every <save_epoch_freq> epochs
+            # model.save_networks('latest')
+            model.save_networks(epoch, param_name)
             print('saving the model at the end of epoch %d, iters %d' % (epoch, total_iters))
-            model.save_networks('latest')
-            model.save_networks(epoch)
 
         if use_ddp:
             dist.barrier()

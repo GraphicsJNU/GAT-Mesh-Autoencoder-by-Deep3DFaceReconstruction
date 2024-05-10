@@ -1,14 +1,12 @@
 from .message_passing import MessagePassing
 from .cheb_conv import ChebConv
 from .gat_conv import GATConv
-from .arma_conv import ARMAConv
-from .spiral_conv import SpiralConv
+from .enhanced_gat_conv import EnhancedGATConv
 
 
 __all__ = [
     'MessagePassing',
     'ChebConv',
     'GATConv',
-    'ARMAConv',
-    'SpiralConv'
+    'EnhancedGATConv'
 ]

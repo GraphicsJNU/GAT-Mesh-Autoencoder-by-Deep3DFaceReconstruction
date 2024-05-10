@@ -19,4 +19,5 @@ class TestOptions(BaseOptions):
 
         # Dropout and Batchnorm has different behavior during training and test.
         self.isTrain = False
+
         return parser

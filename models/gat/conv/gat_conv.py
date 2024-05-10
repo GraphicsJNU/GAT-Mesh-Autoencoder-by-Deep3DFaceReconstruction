@@ -143,8 +143,6 @@ class GATConv(MessagePassing):
             self.lin_edge = None
             self.register_parameter('att_edge', None)
 
-        # self.cheb_weight = Parameter(torch.Tensor(K, out_channels, out_channels))
-
         if bias and concat:
             self.bias = Parameter(torch.Tensor(1, 1, heads * out_channels))
         elif bias and not concat:
@@ -194,7 +192,6 @@ class GATConv(MessagePassing):
         assert isinstance(x, Tensor) and len(x.shape) == 3
 
         num_batches, num_nodes = x.shape[0], x.shape[1]
-        dtype = x.dtype
         x_src = x_dst = self.lin_src(x).view(num_batches, num_nodes, H, C)
 
         # Next, we compute node-level attention coefficients, both for source
@@ -232,18 +229,6 @@ class GATConv(MessagePassing):
 
         # edge_updater_type: (alpha: OptPairTensor, edge_attr: OptTensor)
         alpha = self.edge_updater(edge_index, alpha=alpha, edge_attr=edge_attr)
-        # propagate_type: (x: OptPairTensor, alpha: Tensor)
-
-        # Tx_0 = x[0]
-        # out = torch.matmul(Tx_0, self.cheb_weight[0])
-        # if self.cheb_weight.size(0) > 1:
-        #     Tx_1 = self.propagate(edge_index, x=x, alpha=alpha)
-        #     out = out + torch.matmul(Tx_1, self.cheb_weight[1])
-        #
-        #     for k in range(2, self.cheb_weight.size(0)):
-        #         Tx_2 = 2 * self.propagate(edge_index, x=Tx_1, alpha=alpha) - Tx_0
-        #         out = out + torch.matmul(Tx_2, self.cheb_weight[k])
-        #         Tx_0, Tx_1 = Tx_1, Tx_2
 
         out = self.propagate(edge_index, x=x, alpha=alpha)
         out = out.permute(2, 0, 1, 3)

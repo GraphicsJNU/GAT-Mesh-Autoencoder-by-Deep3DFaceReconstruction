@@ -1,78 +1,32 @@
 """ This script defines the proposal face reconstruction model """
 
-import numpy as np
 import torch
-from .base_model import BaseModel
+from .base_model import BaseReconModel
 from . import networks
-from .bfm import ProposalFaceModel
-from .losses import perceptual_loss, photo_loss, reg_loss, reflectance_loss, landmark_loss, encoding_loss
-from util import util
-# from util.pytorch3d import MeshRenderer
-from util.nvdiffrast import MeshRenderer
-from util.preprocess import estimate_norm_torch
+from .face_model import ProposalFaceModel
+from .losses import perceptual_loss, photo_loss, reg_loss, reflectance_loss, landmark_loss
 
-import trimesh
-from scipy.io import savemat
+import os.path as osp
+from psbody.mesh import Mesh
+from models.gat.utils.utils import to_edge_index, to_sparse, get_graph_info
+from models.gat.networks import Decoder, VariationalAutoEncoder
+
+import time
 
 
-class ProposalModel(BaseModel):
+class ProposalModel(BaseReconModel):
     @staticmethod
     def modify_commandline_options(parser, is_train=True):
-        """  Configures options specific for CUT model  """
-        # net structure and parameters
-        parser.add_argument('--net_recon', type=str, default='resnet50', choices=['resnet18', 'resnet34', 'resnet50'],
-                            help='network structure')
-        parser.add_argument('--init_path', type=str, default='checkpoints/init_model/resnet50-0676ba61.pth')
-        parser.add_argument('--use_last_fc', type=util.str2bool, nargs='?', const=True, default=False,
-                            help='zero initialize the last fc')
-        parser.add_argument('--bfm_folder', type=str, default='BFM')
-        # parser.add_argument('--bfm_model', type=str, default='facewarehouse_model_front.mat', help='bfm model')
-        parser.add_argument('--bfm_model', type=str, default='BFM_model_for_300W_3D.mat', help='bfm model')
+        parser = BaseReconModel.modify_commandline_options(parser, is_train)
 
-        # renderer parameters
-        parser.add_argument('--focal', type=float, default=1015.)
-        parser.add_argument('--center', type=float, default=112.)
-        parser.add_argument('--camera_d', type=float, default=10.)
-        parser.add_argument('--z_near', type=float, default=5.)
-        parser.add_argument('--z_far', type=float, default=15.)
-        parser.add_argument('--use_opengl', type=util.str2bool, nargs='?', const=True, default=True,
-                            help='use opengl context or not')
+        # parser.set_defaults(bfm_model='facewarehouse_model_front.mat')
+        parser.set_defaults(bfm_model='BFM_model_for_300W_3D.mat')
 
         if is_train:
-            # training parameters
-            parser.add_argument('--net_recog', type=str, default='r50', choices=['r18', 'r43', 'r50'],
-                                help='face recog network structure')
-            parser.add_argument('--net_recog_path', type=str,
-                                default='checkpoints/recog_model/ms1mv3_arcface_r50_fp16/backbone.pth')
-            parser.add_argument('--use_crop_face', type=util.str2bool, nargs='?', const=True, default=False,
-                                help='use crop mask for photo loss')
-            parser.add_argument('--use_predef_M', type=util.str2bool, nargs='?', const=True, default=False,
-                                help='use predefined M for predicted face')
-
-            # augmentation parameters
-            parser.add_argument('--shift_pixs', type=float, default=10., help='shift pixels')
-            parser.add_argument('--scale_delta', type=float, default=0.1, help='delta scale factor')
-            parser.add_argument('--rot_angle', type=float, default=10., help='rot angles, degree')
-
             # loss weights
-            parser.add_argument('--w_feat', type=float, default=0.2, help='weight for feat loss')
-            parser.add_argument('--w_color', type=float, default=1.92, help='weight for loss loss')
-            parser.add_argument('--w_reg', type=float, default=3.0e-4, help='weight for reg loss')
-            parser.add_argument('--w_id', type=float, default=1.0, help='weight for id_reg loss')
-            parser.add_argument('--w_exp', type=float, default=0.0, help='weight for exp_reg loss')
-            parser.add_argument('--w_tex', type=float, default=1.7e-2, help='weight for tex_reg loss')
-            parser.add_argument('--w_gamma', type=float, default=10.0, help='weight for gamma loss')
-            parser.add_argument('--w_lm', type=float, default=1.6e-3, help='weight for lm loss')
-            parser.add_argument('--w_reflc', type=float, default=5.0, help='weight for reflc loss')
-
-        opt, _ = parser.parse_known_args()
-        parser.set_defaults(
-            focal=1015., center=112., camera_d=10., use_last_fc=False, z_near=5., z_far=15.
-        )
-        if is_train:
-            parser.set_defaults(
-                use_crop_face=True, use_predef_M=False
-            )
+            parser.set_defaults(w_feat=0.2, w_color=1.92, w_reg=3.0e-4,
+                                w_id=1, w_exp=0.8, w_tex=1.7e-3,
+                                w_gamma=10.0, w_lm=1.6e-3, w_reflc=5.0)
 
         return parser
 
@@ -86,168 +40,87 @@ class ProposalModel(BaseModel):
         - (required) call the initialization function of BaseModel
         - define loss function, visualization images, model names, and optimizers
         """
-        BaseModel.__init__(self, opt)  # call the initialization method of BaseModel
 
-        self.visual_names = ['output_vis']
-        self.model_names = ['net_recon']
-        self.parallel_names = self.model_names + ['renderer']
+        BaseReconModel.__init__(self, opt)  # call the initialization method of BaseModel
 
-        id_dim, tex_dim, angle_dim, gamma_dim, xy_dim, z_dim = 256, 80, 3, 27, 2, 1
-        # id_dim, tex_dim, angle_dim, gamma_dim, xy_dim, z_dim = 64, 80, 3, 27, 2, 1
-        fc_dim = id_dim + tex_dim + angle_dim + gamma_dim + xy_dim + z_dim
+        self.model_names.append('shape_decoder_layer_fc' if opt.shape_fc_train else 'shape_decoder_layer')
+        self.parallel_names.append('shape_decoder_layer_fc' if opt.shape_fc_train else 'shape_decoder_layer')
+        self.model_names.append('texture_decoder_layer_fc' if opt.texture_fc_train else 'texture_decoder_layer')
+        self.parallel_names.append('texture_decoder_layer_fc' if opt.texture_fc_train else 'texture_decoder_layer')
+
+        id_dim, tex_dim, angle_dim, gamma_dim, xy_dim, z_dim = opt.ae_dim, opt.ae_dim, 3, 27, 2, 1
         final_layers = [id_dim, tex_dim, angle_dim, gamma_dim, xy_dim, z_dim]
+        fc_dim = sum(final_layers)
         self.net_recon = networks.define_net_recon(
             net_recon=opt.net_recon, use_last_fc=opt.use_last_fc, init_path=opt.init_path, fc_dim=fc_dim,
             final_layers=final_layers
         )
 
-        # self.net_recon = networks.define_my_net_recon(
-        #     net_recog=opt.net_recog, pretrained_path=opt.net_recog_path,
-        #     final_layers=final_layers
-        # )
+        base_path = './models/gat/datas'
+        mesh = Mesh(filename=osp.join(base_path, 'mu.obj'))
+        m, a, d, u, f = get_graph_info(mesh, './models/gat/datas')
+        mean = torch.load(osp.join(base_path, 'mean_f6.pt'))
+        std = torch.load(osp.join(base_path, 'standard_variation_f6.pt'))
 
-        # self.net_recon = networks.ADD_GCN('resnet50', final_layers=final_layers)
+        feature_dim = 3
+        lambda_max = 2.0  # 2.3
+        filters = [feature_dim, 16, 16, 16, 32, 32]
+        w_kl = opt.w_kl
+        enc_conv, dec_conv = opt.enc_conv, opt.dec_conv
+        enc_k, dec_k = opt.enc_k, opt.dec_k
+        ae_pretrained_epoch = opt.ae_pretrained_epoch
 
-        self.facemodel = ProposalFaceModel(
+        edge_index_list = [to_edge_index(adj) for adj in a]
+        up_transform_list = [to_sparse(up_transform) for up_transform in u]
+
+        self.shape_decoder_layer = Decoder(filters, edge_index_list, up_transform_list, final_layers[0],
+                                           dec_k, lambda_max=lambda_max, conv=dec_conv)
+        self.shape_decoder_layer_fc = self.shape_decoder_layer.fc
+        shape_autoencoder_file_name = 'variational_auto_encoder_{:d}_{}_{:d}_{}_{:d}_{:.0e}_f3_shape_{:d}.pt' \
+            .format(final_layers[0], enc_conv, enc_k, dec_conv, dec_k, w_kl, ae_pretrained_epoch)
+        if ae_pretrained_epoch:
+            shape_decoder_path = osp.join(base_path, shape_autoencoder_file_name)
+            if osp.exists(shape_decoder_path):
+                print("load shape decoder")
+                shape_saved_data = torch.load(shape_decoder_path)
+                shape_auto_encoder = VariationalAutoEncoder(feature_dim, final_layers[0], a, d, u, enc_k, dec_k,
+                                                            lambda_max, enc_conv, dec_conv, 'cpu')
+                shape_auto_encoder.load_state_dict(shape_saved_data['model_state_dict'])
+                self.shape_decoder_layer.load_state_dict(shape_auto_encoder.decoder.state_dict())
+            else:
+                raise Exception("Not shape decoder")
+        self.shape_decoder_layer.eval()
+
+        self.texture_decoder_layer = Decoder(filters, edge_index_list, up_transform_list, final_layers[1],
+                                             dec_k, lambda_max=lambda_max, conv=dec_conv)
+        self.texture_decoder_layer_fc = self.texture_decoder_layer.fc
+        texture_autoencoder_file_name = 'variational_auto_encoder_{:d}_{}_{:d}_{}_{:d}_{:.0e}_f3_texture_{:d}.pt' \
+            .format(final_layers[1], enc_conv, enc_k, dec_conv, dec_k, w_kl, ae_pretrained_epoch)
+        if ae_pretrained_epoch:
+            texture_decoder_path = osp.join(base_path, texture_autoencoder_file_name)
+            if osp.exists(texture_decoder_path):
+                print("load texture decoder")
+                texture_saved_data = torch.load(texture_decoder_path)
+                texture_auto_encoder = VariationalAutoEncoder(feature_dim, final_layers[1], a, d, u, enc_k, dec_k,
+                                                              lambda_max, enc_conv, dec_conv, 'cpu')
+                texture_auto_encoder.load_state_dict(texture_saved_data['model_state_dict'])
+                self.texture_decoder_layer.load_state_dict(texture_auto_encoder.decoder.state_dict())
+            else:
+                raise Exception("Not texture decoder")
+        self.texture_decoder_layer.eval()
+
+        self.face_model = ProposalFaceModel(
+            mean, std, self.shape_decoder_layer, self.texture_decoder_layer,
             bfm_folder=opt.bfm_folder, camera_distance=opt.camera_d, focal=opt.focal, center=opt.center,
             is_train=self.isTrain, default_name=opt.bfm_model,
             coeff_dims=final_layers
         )
 
-        fov = 2 * np.arctan(opt.center / opt.focal) * 180 / np.pi
-        self.renderer = MeshRenderer(
-            rasterize_fov=fov,
-            znear=opt.z_near,
-            zfar=opt.z_far,
-            rasterize_size=int(2 * opt.center),
-            use_opengl=opt.use_opengl
-        )
-
         if self.isTrain:
-            self.loss_names = ['all', 'feat', 'color', 'lm', 'reg', 'gamma', 'reflc']
-
-            self.net_recog = networks.define_net_recog(
-                net_recog=opt.net_recog, pretrained_path=opt.net_recog_path
-            )
-
-            # loss func name: (compute_%s_loss) % loss_name
-            self.compute_feat_loss = perceptual_loss
-            self.comupte_color_loss = photo_loss
-            self.compute_lm_loss = landmark_loss
-            self.compute_reg_loss = reg_loss
-            self.compute_reflc_loss = reflectance_loss
-
-            self.optimizer = torch.optim.Adam(self.net_recon.parameters(), lr=opt.lr)
-            self.optimizers = [self.optimizer]
-            self.parallel_names += ['net_recog']
+            params = [{'params': self.net_recon.parameters()},
+                      {'params': self.shape_decoder_layer_fc.parameters() if opt.shape_fc_train else self.shape_decoder_layer.parameters()},
+                      {'params': self.texture_decoder_layer_fc.parameters() if opt.texture_fc_train else self.texture_decoder_layer.parameters()}]
+            optimizer = torch.optim.Adam(params, lr=opt.lr)
+            self.optimizers = [optimizer]
         # Our program will automatically call <model.setup> to define schedulers, load networks, and print networks
 
-    def train(self):
-        super().train()
-
-        self.facemodel.decoder_layer.eval()
-
-    def set_input(self, input):
-        """Unpack input data from the dataloader and perform necessary pre-processing steps.
-
-        Parameters:
-            input: a dictionary that contains the data itself and its metadata information.
-        """
-        self.input_img = input['imgs'].to(self.device)
-        self.atten_mask = input['msks'].to(self.device) if 'msks' in input else None
-        self.gt_lm = input['lms'].to(self.device) if 'lms' in input else None
-        self.trans_m = input['M'].to(self.device) if 'M' in input else None
-        self.image_paths = input['im_paths'] if 'im_paths' in input else None
-        # self.gt_encoded_vec = input['encoded_vec'] if 'encoded_vec' in input else None
-
-    def forward(self):
-        output_coeff = self.net_recon(self.input_img)
-        # output_coeff = self.net_recon(self.input_img, self.trans_m)
-        self.facemodel.to(self.device)
-        self.pred_vertex, self.pred_tex, self.pred_color, self.pred_lm = \
-            self.facemodel.compute_for_render(output_coeff)
-
-        self.pred_mask, _, self.pred_face = self.renderer(
-            self.pred_vertex, self.facemodel.face_buf, feat=self.pred_color)
-
-        self.pred_coeffs_dict = self.facemodel.split_coeff(output_coeff)
-
-    def compute_losses(self):
-        """Calculate losses, gradients, and update network weights; called in every training iteration"""
-
-        assert self.net_recog.training == False
-
-        trans_m = self.trans_m
-        if not self.opt.use_predef_M:
-            trans_m = estimate_norm_torch(self.pred_lm, self.input_img.shape[-2])
-
-        pred_feat = self.net_recog(self.pred_face, trans_m)
-        gt_feat = self.net_recog(self.input_img, self.trans_m)
-        self.loss_feat = self.opt.w_feat * self.compute_feat_loss(pred_feat, gt_feat)
-
-        face_mask = self.pred_mask.detach()
-        if self.opt.use_crop_face:
-            face_mask, _, _ = self.renderer(self.pred_vertex, self.facemodel.front_face_buf)
-
-        face_mask = face_mask.detach()
-        self.loss_color = self.opt.w_color * self.comupte_color_loss(
-            self.pred_face, self.input_img, self.atten_mask * face_mask)
-
-        loss_reg, loss_gamma = self.compute_reg_loss(self.pred_coeffs_dict, self.opt)
-        self.loss_reg = self.opt.w_reg * loss_reg
-        self.loss_gamma = self.opt.w_gamma * loss_gamma
-
-        self.loss_lm = self.opt.w_lm * self.compute_lm_loss(self.pred_lm, self.gt_lm)
-
-        self.loss_reflc = self.opt.w_reflc * self.compute_reflc_loss(self.pred_tex, self.facemodel.skin_mask)
-
-        self.loss_all = self.loss_feat + self.loss_color + self.loss_reg + self.loss_gamma \
-                        + self.loss_lm + self.loss_reflc
-
-    def optimize_parameters(self, isTrain=True):
-        self.forward()
-        self.compute_losses()
-        """Update network weights; it will be called in every training iteration."""
-        if isTrain:
-            self.optimizer.zero_grad()
-            self.loss_all.backward()
-            self.optimizer.step()
-
-    def compute_visuals(self):
-        device = self.device
-        with torch.no_grad():
-            input_img_numpy = 255. * self.input_img.detach().cpu().permute(0, 2, 3, 1).numpy()
-
-            output_vis = self.pred_face * self.pred_mask + (1 - self.pred_mask) * self.input_img
-            output_vis_numpy_raw = 255. * output_vis.detach().cpu().permute(0, 2, 3, 1).numpy()
-
-            if self.gt_lm is not None:
-                gt_lm_numpy = self.gt_lm.cpu().numpy()
-                pred_lm_numpy = self.pred_lm.detach().cpu().numpy()
-                output_vis_numpy = util.draw_landmarks(output_vis_numpy_raw, gt_lm_numpy, 'b')
-                output_vis_numpy = util.draw_landmarks(output_vis_numpy, pred_lm_numpy, 'r')
-
-                output_vis_numpy = np.concatenate((input_img_numpy, output_vis_numpy_raw, output_vis_numpy), axis=-2)
-            else:
-                output_vis_numpy = np.concatenate((input_img_numpy, output_vis_numpy_raw), axis=-2)
-
-            self.output_vis = torch.tensor(output_vis_numpy / 255., dtype=torch.float32).permute(0, 3, 1, 2).to(device)
-
-    def save_mesh(self, name):
-        recon_shape = self.pred_vertex  # get reconstructed shape
-        recon_shape[..., -1] = 10 - recon_shape[..., -1]  # from camera space to world space
-        recon_shape = recon_shape.cpu().numpy()[0]
-        recon_color = self.pred_color
-        recon_color = recon_color.cpu().numpy()[0]
-        tri = self.facemodel.face_buf.cpu().numpy()
-        mesh = trimesh.Trimesh(vertices=recon_shape, faces=tri,
-                               vertex_colors=np.clip(255. * recon_color, 0, 255).astype(np.uint8), process=False)
-        mesh.export(name)
-
-    def save_coeff(self, name):
-        pred_coeffs = {key: self.pred_coeffs_dict[key].cpu().numpy() for key in self.pred_coeffs_dict}
-        pred_lm = self.pred_lm.cpu().numpy()
-        pred_lm = np.stack([pred_lm[:, :, 0], self.input_img.shape[2] - 1 - pred_lm[:, :, 1]],
-                           axis=2)  # transfer to image coordinate
-        pred_coeffs['lm68'] = pred_lm
-        savemat(name, pred_coeffs)
